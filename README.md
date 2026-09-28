@@ -30,6 +30,8 @@
 | 低温度 + 输出长度限制 | 意图分类只需 yes/no，用 temperature 0.0001 与 num_predict=10 压成本 |
 | 多层截断 | 检索 query 截 200 字符、每条摘要截 1000 字符，保护有限的上下文窗口 |
 | 滑动窗口 | 会话历史最多保留 20 轮，超出自动丢弃最早一轮 |
+| 同步检索放进线程池 | ddgs 与 ollama 客户端都是同步接口，用 `asyncio.to_thread` 包装，避免阻塞 NoneBot 的事件循环 |
+| 快照 + 异步锁 | 请求体用历史列表的快照，缓存读写用 `asyncio.Lock` 保护，避免并发时上下文串台 |
 | 失败降级 | 意图分类任何异常一律返回 `no`，退化为普通对话；摘要失败则回退原始检索结果 |
 | 会话隔离 | 群聊共享一份上下文，私聊按用户独立；支持 `/clear`、`/change` 换模型 |
 
@@ -39,10 +41,15 @@
 pip install -r requirements.txt   # aiohttp ollama ddgs
 ```
 
-在 NoneBot 配置中填写模型列表：
+在 NoneBot 配置中填写需要的字段（均有默认值，按需覆盖即可）：
 
 ```dotenv
-Model_list=["CHAT_OFFLINE","q4_chaoji"]
+Model_list=["CHAT_OFFLINE","q4_chaoji"]   # /change 可切换的离线模型
+online_model="CHAT_ONLINE"                # 走联网链路的模型
+light_model="qwen2.5:3b"                  # 意图分类与检索词生成的轻量模型
+ollama_url="http://localhost:11434"       # Ollama 服务地址
+max_rounds=20                             # 上下文保留轮数
+timeout=20                                # 请求超时（秒）
 ```
 
 ## 命令
@@ -55,6 +62,6 @@ Model_list=["CHAT_OFFLINE","q4_chaoji"]
 
 ## 已知限制
 
-- 检索与摘要为同步调用，在异步 handler 中会阻塞事件循环，高并发下会拖慢整个机器人
-- 会话历史存在内存字典中，进程重启即丢失，且未做并发加锁
-- 当前仅支持单次检索，未实现「检索结果不满意→改写 query 重试」的多轮迭代
+- 会话历史保存在内存字典中，进程重启即丢失，未做持久化
+- 检索只做一轮，未实现「结果不满意 → 改写 query 重试」的迭代
+- 一条需要检索的消息会串行调用 4 次模型，端到端延迟偏高于普通对话
